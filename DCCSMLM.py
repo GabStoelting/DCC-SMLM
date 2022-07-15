@@ -22,14 +22,14 @@ class DCCProteinOfInterest:
     def COM(self, x, E):
         return [1 - ((np.sum((x - np.mean(x)) ** 2)) / (np.sum((x - e) ** 2))) for e in E]
 
-    def com_bootstrap(self, n_samples, reference, reference_bootstrap=True, save_result=True, max_n=4):
+    def com_bootstrap(self, n_samples, reference, reference_bootstrap=True, save_result=True, max_n=4, only_p=False):
 
         return_df = np.array([])
 
         for i in range(0, n_samples):
 
             if reference_bootstrap:
-                reference.reference_bootstrap(1, save_result=True)
+                reference.reference_bootstrap(1, save_result=True, only_p=only_p)
 
                 sample_resample = self.poi.sample(frac=1, replace=True)  # Resample from the POI samples
 
@@ -72,7 +72,11 @@ class DCCReferenceProteins:
         self.p_ci = (0,0)
         self.m_ci = (0,0)
 
-    def calc_p(self, n, m, p):
+    def _calc_p(self, n, p):
+        """ This returns the colocalization probability for only p (no m!) equivalent to Eq. 1"""
+        return (1 - (1-p)**n)
+
+    def _calc_p_m(self, n, m, p):
         """
 
         :param n: oligomeric state
@@ -92,21 +96,22 @@ class DCCReferenceProteins:
 
         return P_list, P_sum
 
-    def _calc_p_curve_fit(self, n_list, m, p):
+    def _calc_p_m_curve_fit(self, n_list, m, p):
         """ This function is just a wrapper to use calc_p with curve_fit """
         ret_s = []
         for n in n_list:
-            l, s = self.calc_p(int(n), m, p)
+            l, s = self._calc_p_m(int(n), m, p)
             ret_s = np.append(ret_s, s)
 
         return ret_s
 
-    def reference_bootstrap(self, n_samples, save_result=True):
+    def reference_bootstrap(self, n_samples, save_result=True, only_p=False):
         """"
         # Run a bootstrap resampling over the reference calibration values
         #
         # :param n_samples: Number of resamples
         # :param save_result: Save the result to the corresponding variables of this class (default=True)
+        # :param only_p: Only fit p but not m (default=False)
         """
 
         return_df = np.array([])
@@ -115,24 +120,34 @@ class DCCReferenceProteins:
             rs = self.reference.sample(frac=1, replace=True)  # Resample from the reference distribution
             # Calculate mean values per oligomeric state
             rm = rs.groupby(self.oligo_column).mean()[self.value_column].to_list()
-            popt, pcov = curve_fit(self._calc_p_curve_fit, [1, 2, 3, 4], rm, p0=(0.76, 0.17))  # Fit Eq. 6
+            if not only_p:
+                popt, pcov = curve_fit(self._calc_p_m_curve_fit, [1, 2, 3, 4], rm, p0=(0.76, 0.17))  # Fit Eq. 6
+            elif only_p:
+                popt, pcov = curve_fit(self._calc_p, [1, 2, 3, 4], rm, p0=(0.17))  # Fit Eq. 1 (only p!)
             return_df = np.append(return_df, popt)  # Add the result to the return DataFrame
 
         return_df = return_df.reshape(-1, popt.shape[0])
 
         if save_result:
-            self.m = return_df.mean(axis=0)[0]
-            self.m_ci = (np.percentile(return_df, 2.5, axis=0)[0], np.percentile(return_df, 97.5, axis=0)[0])
+            if not only_p:
+                self.m = return_df.mean(axis=0)[0]
+                self.m_ci = (np.percentile(return_df, 2.5, axis=0)[0], np.percentile(return_df, 97.5, axis=0)[0])
 
-            self.p = return_df.mean(axis=0)[1]
-            self.p_ci = (np.percentile(return_df, 2.5, axis=0)[1], np.percentile(return_df, 97.5, axis=0)[1])
+                self.p = return_df.mean(axis=0)[1]
+                self.p_ci = (np.percentile(return_df, 2.5, axis=0)[1], np.percentile(return_df, 97.5, axis=0)[1])
+            elif only_p:
+                self.p = return_df.mean(axis=0)
+                self.p_ci = (np.percentile(return_df, 2.5, axis=0), np.percentile(return_df, 97.5, axis=0))
 
         return return_df
 
-    def E(self, n=4):
-        """ This function returns the expected colocalization values based on p and m"""
+    def E(self, n=4, only_p=False):
+        """ This function returns the expected colocalization values based on p (and m if only_p == True)"""
         if self.p > 0:
-            return [self.calc_p(k, self.m, self.p)[1] for k in range(1, n+1)]
+            if not only_p:
+                return [self._calc_p_m(k, self.m, self.p)[1] for k in range(1, n+1)]
+            elif only_p:
+                return [self._calc_p(k, self.p) for k in range(1, n + 1)]
         else:
             raise ValueError("Please fit and save the reference proteins first")
 
