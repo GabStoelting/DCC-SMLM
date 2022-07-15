@@ -1,11 +1,140 @@
 import h5py
 import pandas as pd
 import numpy as np
-from scipy.stats import norm
+from scipy.stats import norm, ks_2samp
 from sklearn.cluster import DBSCAN, OPTICS
 from scipy.spatial import KDTree
 from scipy.optimize import curve_fit
+from scipy.special import binom
 
+class DCCProteinOfInterest:
+    def __init__(self, poi_filename, value_column):
+        self.poi = pd.read_csv(poi_filename)
+        self.value_column = value_column
+
+        self.bs_mean = 0
+        self.bs_lower_ci = []
+        self.bs_upper_ci = []
+
+        self.ks = []
+        self.ks_stat = []
+
+    def COM(self, x, E):
+        return [1 - ((np.sum((x - np.mean(x)) ** 2)) / (np.sum((x - e) ** 2))) for e in E]
+
+    def com_bootstrap(self, n_samples, reference, reference_bootstrap=True, save_result=True, max_n=4):
+
+        return_df = np.array([])
+
+        for i in range(0, n_samples):
+
+            if reference_bootstrap:
+                reference.reference_bootstrap(1, save_result=True)
+
+                sample_resample = self.poi.sample(frac=1, replace=True)  # Resample from the POI samples
+
+            # Calculate the
+            bs_sample = self.COM(sample_resample[self.value_column].values, reference.E(n=max_n))
+
+            return_df = np.append(return_df, bs_sample)  # Add the result to the return DataFrame
+
+        return_df = return_df.reshape(-1, len(bs_sample))
+
+        if save_result:
+            self.bs_mean = return_df.mean(axis=0)
+            self.bs_lower_ci = np.percentile(return_df, 2.5, axis=0)
+            self.bs_upper_ci = np.percentile(return_df, 97.5, axis=0)
+
+        return return_df
+
+    def KS(self, reference, save_results=True):
+        reference_unique = reference.reference[reference.oligo_column].unique()
+        reference_values = [reference.reference[reference.reference[reference.oligo_column] == n]
+                            [reference.value_column].values for n in reference_unique]
+        ks_result = [ks_2samp(self.poi[self.value_column].values, r)[1] for r in reference_values]
+        ks_stats = [ks_2samp(self.poi[self.value_column].values, r)[0] for r in reference_values]
+        if save_results:
+            self.ks = ks_result
+            self.ks_stat = ks_stats
+
+        return ks_result
+
+class DCCReferenceProteins:
+    def __init__(self, reference_filename, value_column, oligo_column):
+        self.reference = pd.read_csv(reference_filename)
+        self.value_column = value_column
+        self.oligo_column = oligo_column
+        self.reference_mean = self.reference.groupby(oligo_column).mean()[value_column].to_list()
+        self.reference_std = self.reference.groupby(oligo_column).std()[value_column].to_list()
+
+        self.p = 0
+        self.m = 0
+        self.p_ci = (0,0)
+        self.m_ci = (0,0)
+
+    def calc_p(self, n, m, p):
+        """
+
+        :param n: oligomeric state
+        :param m: the probability of finding an intact marker
+        :param p:  the probability of detecting an indicator protein if the marker is intact
+        :return:
+        """
+        m = 1-m # We inverted the definition of m
+
+        # The following corresponds to Eq. 6 in our paper
+        def _calc(k):
+            return (1 - (1 - p) ** k) * (binom(n, k) * m ** k * (1 - m) ** (n - k)) / (1 - (1 - m) ** n)
+
+        k_list = range(1, n + 1)
+        P_list = list(map(_calc, k_list))
+        P_sum = sum(P_list)
+
+        return P_list, P_sum
+
+    def _calc_p_curve_fit(self, n_list, m, p):
+        """ This function is just a wrapper to use calc_p with curve_fit """
+        ret_s = []
+        for n in n_list:
+            l, s = self.calc_p(int(n), m, p)
+            ret_s = np.append(ret_s, s)
+
+        return ret_s
+
+    def reference_bootstrap(self, n_samples, save_result=True):
+        """"
+        # Run a bootstrap resampling over the reference calibration values
+        #
+        # :param n_samples: Number of resamples
+        # :param save_result: Save the result to the corresponding variables of this class (default=True)
+        """
+
+        return_df = np.array([])
+
+        for i in range(0, n_samples):
+            rs = self.reference.sample(frac=1, replace=True)  # Resample from the reference distribution
+            # Calculate mean values per oligomeric state
+            rm = rs.groupby(self.oligo_column).mean()[self.value_column].to_list()
+            popt, pcov = curve_fit(self._calc_p_curve_fit, [1, 2, 3, 4], rm, p0=(0.76, 0.17))  # Fit Eq. 6
+            return_df = np.append(return_df, popt)  # Add the result to the return DataFrame
+
+        return_df = return_df.reshape(-1, popt.shape[0])
+
+        if save_result:
+            self.m = return_df.mean(axis=0)[0]
+            self.m_ci = (np.percentile(return_df, 2.5, axis=0)[0], np.percentile(return_df, 97.5, axis=0)[0])
+
+            self.p = return_df.mean(axis=0)[1]
+            self.p_ci = (np.percentile(return_df, 2.5, axis=0)[1], np.percentile(return_df, 97.5, axis=0)[1])
+
+        return return_df
+
+    def E(self, n=4):
+        """ This function returns the expected colocalization values based on p and m"""
+        if self.p > 0:
+            return [self.calc_p(k, self.m, self.p)[1] for k in range(1, n+1)]
+        else:
+            raise ValueError("Please fit and save the reference proteins first")
 
 class Channel:
     def __init__(self, raw_data, x_column="x", y_column="y", intensity_column="intensity", frame_column="frame"):
@@ -323,7 +452,6 @@ class Channel:
             return row
 
         self.raw_data = self.raw_data.apply(correctCA, axis=1)
-
 
 class DCCSMLM():
     """
