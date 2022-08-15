@@ -764,7 +764,7 @@ class DCCSMLM():
         if save_ca_params:
             self.channel[channel_two].set_chromatic_aberration_params(popt_x[0], popt_y[0], popt_x[1], popt_y[1])
 
-        return pd.DataFrame(popt_x[0], popt_y[0], popt_x[1], popt_y[1]), ca
+        return [popt_x[0], popt_y[0], popt_x[1], popt_y[1]], ca
 
     def pair_correlation(self, channel_one, channel_two, distance_cutoff=400, k=50, delta_r=20):
         """
