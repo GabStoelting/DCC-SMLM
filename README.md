@@ -127,8 +127,8 @@ See the [open issues](https://github.com/GabStoelting/DCC-SMLM/issues) for a ful
 This tool has been used in the following publications:
 <ol>
   <li>
-    <a href="https://www.biorxiv.org/content/10.1101/2021.10.05.463155v4">
-      Tan, H.L. et al. Determination of protein stoichiometries via dual-color colocalization with single molecule localization microscopy. BioRxiv (2022).
+    <a href="https://elifesciences.org/articles/76631">
+      Tan, H.L. et al. Determination of oligomeric states of proteins via dual-color colocalization with single molecule localization microscopy. eLife (2022).
     </a>
   </li>
 </ol>
